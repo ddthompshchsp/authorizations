@@ -1,3 +1,10 @@
+# hchsp_disability_authorizations.py
+# Streamlit app to reformat "HCHSP Disability Authorizations"
+# Updates:
+# - No logo
+# - Title includes date & time
+# - File name must include 10432
+# - No preview
 
 import io
 from datetime import datetime
@@ -8,18 +15,14 @@ import pandas as pd
 import streamlit as st
 from openpyxl.styles import Alignment, Border, Side, PatternFill, Font
 from openpyxl.utils import get_column_letter
-from openpyxl.drawing.image import Image as XLImage  # for embedding logo
 
 st.set_page_config(page_title="HCHSP — Disability Authorizations Formatter", layout="wide")
 
 # ----------------------------
-# Header (match house style)
+# Header (house style)
 # ----------------------------
-logo_path = Path("header_logo.png")
 hdr_l, hdr_c, hdr_r = st.columns([1, 2, 1])
 with hdr_c:
-    if logo_path.exists():
-        st.image(str(logo_path), width=320)
     st.markdown(
         """
         <h1 style='text-align:center; margin: 8px 0 4px;'>Hidalgo County Head Start — Disability Authorizations</h1>
@@ -55,7 +58,6 @@ def _detect_header_row(df: pd.DataFrame) -> int:
     mask = first_col.str.contains("participant pid", na=False)
     if mask.any():
         return mask.idxmax()
-    # fallback: look for a row containing many 'ST:' markers
     counts = df.apply(lambda r: r.astype(str).str.contains("ST:").sum(), axis=1)
     return int(counts.idxmax())
 
@@ -95,7 +97,7 @@ def _autosize_columns(ws):
 
 
 def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
-    """Build an in-memory XLSX with styling, logo, and fixed title."""
+    """Build in-memory XLSX with styling and title/date."""
     # Format Authorization Date as mm/dd/YYYY while preserving blanks
     if "Authorization Date" in df.columns:
         dt = pd.to_datetime(df["Authorization Date"], errors="coerce")
@@ -103,15 +105,14 @@ def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        # leave row 1 for logo + title, row 2 for header
-        df.to_excel(writer, index=False, sheet_name="Authorizations", startrow=1)
+        df.to_excel(writer, index=False, sheet_name="Authorizations", startrow=1)  # leave row 1 for title
         wb = writer.book
         ws = writer.sheets["Authorizations"]
 
-        # Freeze panes: after title+header (row 2)
+        # Freeze panes below header row
         ws.freeze_panes = "A3"
 
-        # Header style (blue bg, white text) on row 2
+        # Header style
         header_row = 2
         for col_idx in range(1, ws.max_column + 1):
             cell = ws.cell(row=header_row, column=col_idx)
@@ -119,44 +120,31 @@ def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
             cell.font = Font(bold=True, color=WHITE)
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        # AutoFilter across entire used range
+        # AutoFilter
         ws.auto_filter.ref = ws.dimensions
 
-        # Place logo in A1 and title side-by-side in C1 (merge C1..last)
-        ws.row_dimensions[1].height = 60
-        try:
-            if logo_path.exists():
-                img = XLImage(str(logo_path))
-                img.anchor = "A1"
-                ws.add_image(img)
-        except Exception:
-            pass
-
-        # Title in C1 merged across to last column
-        start_col_for_title = 3  # column C
-        end_col_for_title = ws.max_column if ws.max_column >= start_col_for_title else start_col_for_title
-        ws.merge_cells(start_row=1, start_column=start_col_for_title, end_row=1, end_column=end_col_for_title)
-        title_cell = ws.cell(row=1, column=start_col_for_title)
+        # Title row with timestamp
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ws.max_column)
+        title_cell = ws.cell(row=1, column=1)
         title_cell.value = title_text
         title_cell.font = Font(bold=True, size=14)
         title_cell.alignment = Alignment(horizontal="left", vertical="center")
 
-        # Outline box around title + data block
+        # Borders
         max_row, max_col = ws.max_row, ws.max_column
         for r in range(1, max_row + 1):
             for c in range(1, max_col + 1):
                 cell = ws.cell(row=r, column=c)
-                # Outer border medium if on the outer frame; else thin grid
                 left   = MED if c == 1 else THIN
                 right  = MED if c == max_col else THIN
                 top    = MED if r == 1 else THIN
                 bottom = MED if r == max_row else THIN
                 cell.border = Border(left=left, right=right, top=top, bottom=bottom)
 
-        # Style Authorization Date column: green font for dates, red X if blank
+        # Style Authorization Date column
         if "Authorization Date" in df.columns:
             date_col_idx = list(df.columns).index("Authorization Date") + 1
-            for r in range(3, ws.max_row + 1):  # data starts at row 3
+            for r in range(3, ws.max_row + 1):
                 cell = ws.cell(row=r, column=date_col_idx)
                 val = (cell.value or "").strip() if isinstance(cell.value, str) else cell.value
                 if val in (None, ""):
@@ -175,32 +163,27 @@ def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
 # Main
 # ----------------------------
 if up:
-    # Validate file name contains 10432
+    # Validate file name
     safe_name = getattr(up, "name", "") or ""
     if "10432" not in safe_name:
-        st.error("Please upload the correct file: the filename must include **10432**.")
+        st.error("Please upload the correct file: filename must include **10432**.")
         st.stop()
 
-    # Read raw with no header to detect header row, then re-read with header
     raw = pd.read_excel(up, header=None)
     hdr_row = _detect_header_row(raw)
     df = pd.read_excel(up, header=hdr_row)
 
-    # Drop completely empty rows
     df = df.dropna(how="all")
-
-    # Rename columns
     df.columns = _rename_columns(df.columns)
 
-    # Keep only expected columns (in order, if present)
     desired_cols = ["PID", "First Name", "Last Name", "Center", "Class", "Authorization Date"]
     existing_cols = [c for c in desired_cols if c in df.columns]
     df = df[existing_cols]
 
-    # Fixed title (per request)
-    fixed_title = "25-26 Authorizations"
+    # Title with timestamp
+    now_str = datetime.now().strftime("%m/%d/%Y %I:%M %p")
+    fixed_title = f"25-26 Authorizations — Exported {now_str}"
 
-    # Build styled workbook (NO preview in UI)
     xlsx_bytes = build_output_workbook(df, fixed_title)
 
     st.success("File processed. Click to download your formatted workbook.")
@@ -212,3 +195,4 @@ if up:
     )
 else:
     st.info("Upload the **10432** Quick Report export (.xlsx) to begin.")
+
