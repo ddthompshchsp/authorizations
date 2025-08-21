@@ -7,13 +7,14 @@ import re
 
 import pandas as pd
 import streamlit as st
+import pytz
 from openpyxl.styles import Alignment, Border, Side, PatternFill, Font
 from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="HCHSP — Disability Authorizations Formatter", layout="wide")
 
 # ----------------------------
-# Header (house style, UI ONLY)
+# Header (UI ONLY)
 # ----------------------------
 logo_path = Path("header_logo.png")
 hdr_l, hdr_c, hdr_r = st.columns([1, 2, 1])
@@ -94,23 +95,21 @@ def _autosize_columns(ws):
 
 
 def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
-    """Build in-memory XLSX with styling and title (no logo)."""
-    # Format Authorization Date as mm/dd/YYYY while preserving blanks
+    """Build in-memory XLSX with styling and centered title (no logo)."""
     if "Authorization Date" in df.columns:
         dt = pd.to_datetime(df["Authorization Date"], errors="coerce")
         df["Authorization Date"] = dt.dt.strftime("%m/%d/%Y").fillna("")
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        # Leave row 1 for title; row 2 = header; data from row 3 down
         df.to_excel(writer, index=False, sheet_name="Authorizations", startrow=1)
         wb = writer.book
         ws = writer.sheets["Authorizations"]
 
-        # Freeze panes just below header
+        # Freeze panes below header row
         ws.freeze_panes = "A3"
 
-        # Header style (blue bg, white text) on row 2
+        # Header style (row 2)
         header_row = 2
         for col_idx in range(1, ws.max_column + 1):
             cell = ws.cell(row=header_row, column=col_idx)
@@ -118,17 +117,17 @@ def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
             cell.font = Font(bold=True, color=WHITE)
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        # AutoFilter across entire used range
+        # AutoFilter
         ws.auto_filter.ref = ws.dimensions
 
-        # Title row (merged) with timestamp
+        # Centered title row
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ws.max_column)
         title_cell = ws.cell(row=1, column=1)
         title_cell.value = title_text
         title_cell.font = Font(bold=True, size=14)
-        title_cell.alignment = Alignment(horizontal="left", vertical="center")
+        title_cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        # Borders around title + data block
+        # Borders
         max_row, max_col = ws.max_row, ws.max_column
         for r in range(1, max_row + 1):
             for c in range(1, max_col + 1):
@@ -139,7 +138,7 @@ def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
                 bottom = MED if r == max_row else THIN
                 cell.border = Border(left=left, right=right, top=top, bottom=bottom)
 
-        # Style Authorization Date column: green if date, red ✗ if blank
+        # Authorization Date column style
         if "Authorization Date" in df.columns:
             date_col_idx = list(df.columns).index("Authorization Date") + 1
             for r in range(3, ws.max_row + 1):
@@ -161,18 +160,15 @@ def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
 # Main
 # ----------------------------
 if up:
-    # Validate file name
     safe_name = getattr(up, "name", "") or ""
     if "10432" not in safe_name:
         st.error("Please upload the correct file: filename must include **10432**.")
         st.stop()
 
-    # Detect header row, then read with headers
     raw = pd.read_excel(up, header=None)
     hdr_row = _detect_header_row(raw)
     df = pd.read_excel(up, header=hdr_row)
 
-    # Clean rows and columns
     df = df.dropna(how="all")
     df.columns = _rename_columns(df.columns)
 
@@ -180,8 +176,9 @@ if up:
     existing_cols = [c for c in desired_cols if c in df.columns]
     df = df[existing_cols]
 
-    # Title with timestamp for the exported workbook (no logo inside Excel)
-    now_str = datetime.now().strftime("%m/%d/%Y %I:%M %p")
+    # Central time timestamp
+    tz = pytz.timezone("America/Chicago")
+    now_str = datetime.now(tz).strftime("%m/%d/%Y %I:%M %p")
     fixed_title = f"25-26 Authorizations — Exported {now_str}"
 
     xlsx_bytes = build_output_workbook(df, fixed_title)
@@ -190,8 +187,9 @@ if up:
     st.download_button(
         label="Download Disability Authorizations (.xlsx)",
         data=xlsx_bytes,
-        file_name=f"HCHSP_DisabilityAuthorizations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        file_name=f"HCHSP_DisabilityAuthorizations_{datetime.now(tz).strftime('%Y%m%d_%H%M%S')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 else:
     st.info("Upload the **10432** Quick Report export (.xlsx) to begin.")
+
