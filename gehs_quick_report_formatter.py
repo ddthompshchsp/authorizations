@@ -1,10 +1,4 @@
-# hchsp_disability_authorizations.py
-# Streamlit app to reformat "HCHSP Disability Authorizations"
-# Updates:
-# - No logo
-# - Title includes date & time
-# - File name must include 10432
-# - No preview
+
 
 import io
 from datetime import datetime
@@ -19,10 +13,13 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="HCHSP — Disability Authorizations Formatter", layout="wide")
 
 # ----------------------------
-# Header (house style)
+# Header (house style, UI ONLY)
 # ----------------------------
+logo_path = Path("header_logo.png")
 hdr_l, hdr_c, hdr_r = st.columns([1, 2, 1])
 with hdr_c:
+    if logo_path.exists():
+        st.image(str(logo_path), width=320)
     st.markdown(
         """
         <h1 style='text-align:center; margin: 8px 0 4px;'>Hidalgo County Head Start — Disability Authorizations</h1>
@@ -97,7 +94,7 @@ def _autosize_columns(ws):
 
 
 def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
-    """Build in-memory XLSX with styling and title/date."""
+    """Build in-memory XLSX with styling and title (no logo)."""
     # Format Authorization Date as mm/dd/YYYY while preserving blanks
     if "Authorization Date" in df.columns:
         dt = pd.to_datetime(df["Authorization Date"], errors="coerce")
@@ -105,14 +102,15 @@ def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Authorizations", startrow=1)  # leave row 1 for title
+        # Leave row 1 for title; row 2 = header; data from row 3 down
+        df.to_excel(writer, index=False, sheet_name="Authorizations", startrow=1)
         wb = writer.book
         ws = writer.sheets["Authorizations"]
 
-        # Freeze panes below header row
+        # Freeze panes just below header
         ws.freeze_panes = "A3"
 
-        # Header style
+        # Header style (blue bg, white text) on row 2
         header_row = 2
         for col_idx in range(1, ws.max_column + 1):
             cell = ws.cell(row=header_row, column=col_idx)
@@ -120,17 +118,17 @@ def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
             cell.font = Font(bold=True, color=WHITE)
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        # AutoFilter
+        # AutoFilter across entire used range
         ws.auto_filter.ref = ws.dimensions
 
-        # Title row with timestamp
+        # Title row (merged) with timestamp
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ws.max_column)
         title_cell = ws.cell(row=1, column=1)
         title_cell.value = title_text
         title_cell.font = Font(bold=True, size=14)
         title_cell.alignment = Alignment(horizontal="left", vertical="center")
 
-        # Borders
+        # Borders around title + data block
         max_row, max_col = ws.max_row, ws.max_column
         for r in range(1, max_row + 1):
             for c in range(1, max_col + 1):
@@ -141,7 +139,7 @@ def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
                 bottom = MED if r == max_row else THIN
                 cell.border = Border(left=left, right=right, top=top, bottom=bottom)
 
-        # Style Authorization Date column
+        # Style Authorization Date column: green if date, red ✗ if blank
         if "Authorization Date" in df.columns:
             date_col_idx = list(df.columns).index("Authorization Date") + 1
             for r in range(3, ws.max_row + 1):
@@ -169,10 +167,12 @@ if up:
         st.error("Please upload the correct file: filename must include **10432**.")
         st.stop()
 
+    # Detect header row, then read with headers
     raw = pd.read_excel(up, header=None)
     hdr_row = _detect_header_row(raw)
     df = pd.read_excel(up, header=hdr_row)
 
+    # Clean rows and columns
     df = df.dropna(how="all")
     df.columns = _rename_columns(df.columns)
 
@@ -180,7 +180,7 @@ if up:
     existing_cols = [c for c in desired_cols if c in df.columns]
     df = df[existing_cols]
 
-    # Title with timestamp
+    # Title with timestamp for the exported workbook (no logo inside Excel)
     now_str = datetime.now().strftime("%m/%d/%Y %I:%M %p")
     fixed_title = f"25-26 Authorizations — Exported {now_str}"
 
@@ -195,4 +195,3 @@ if up:
     )
 else:
     st.info("Upload the **10432** Quick Report export (.xlsx) to begin.")
-
