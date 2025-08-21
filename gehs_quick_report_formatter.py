@@ -1,6 +1,3 @@
-# gehs_quick_report_formatter.py
-# Streamlit app to reformat GEHS Quick Report and export styled Excel
-# Requirements: streamlit, pandas, openpyxl, pillow (for optional logo)
 
 import io
 from datetime import datetime
@@ -9,12 +6,11 @@ import re
 
 import pandas as pd
 import streamlit as st
-from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Border, Side, PatternFill, Font
 from openpyxl.utils import get_column_letter
-from PIL import Image
+from openpyxl.drawing.image import Image as XLImage  # for embedding logo
 
-st.set_page_config(page_title="HCHSP — GEHS Quick Report Formatter", layout="wide")
+st.set_page_config(page_title="HCHSP — Disability Authorizations Formatter", layout="wide")
 
 # ----------------------------
 # Header (match house style)
@@ -26,9 +22,9 @@ with hdr_c:
         st.image(str(logo_path), width=320)
     st.markdown(
         """
-        <h1 style='text-align:center; margin: 8px 0 4px;'>Hidalgo County Head Start — GEHS Quick Report Formatter</h1>
+        <h1 style='text-align:center; margin: 8px 0 4px;'>Hidalgo County Head Start — Disability Authorizations</h1>
         <p style='text-align:center; font-size:16px; margin-top:0;'>
-        Upload the GEHS Quick Report export and download the cleaned, formatted workbook.
+        Upload the 10432 Quick Report export and download the cleaned, formatted workbook.
         </p>
         """,
         unsafe_allow_html=True,
@@ -39,7 +35,7 @@ st.divider()
 # ----------------------------
 # File Upload
 # ----------------------------
-qf_file = st.file_uploader("Upload *GEHS_QuickReport*.xlsx*", type=["xlsx"]) 
+up = st.file_uploader("Upload *10432*.xlsx", type=["xlsx"], key="qf")
 
 # ----------------------------
 # Helpers
@@ -92,33 +88,30 @@ def _autosize_columns(ws):
         max_len = 0
         for cell in ws[letter]:
             val = cell.value
-            if val is None:
-                length = 0
-            else:
-                length = len(str(val))
+            length = 0 if val is None else len(str(val))
             if length > max_len:
                 max_len = length
         ws.column_dimensions[letter].width = min(max_len + 2, 45)
 
 
-def build_output_workbook(df: pd.DataFrame, run_title: str) -> bytes:
-    # Ensure date column exists and is formatted as text mm/dd/yyyy while preserving blanks
+def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
+    """Build an in-memory XLSX with styling, logo, and fixed title."""
+    # Format Authorization Date as mm/dd/YYYY while preserving blanks
     if "Authorization Date" in df.columns:
         dt = pd.to_datetime(df["Authorization Date"], errors="coerce")
         df["Authorization Date"] = dt.dt.strftime("%m/%d/%Y").fillna("")
 
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="QuickReport", startrow=1)  # leave row 1 for title
-        writer.book.create_named_range  # keeps linter happy
-
+        # leave row 1 for logo + title, row 2 for header
+        df.to_excel(writer, index=False, sheet_name="Authorizations", startrow=1)
         wb = writer.book
-        ws = writer.sheets["QuickReport"]
+        ws = writer.sheets["Authorizations"]
 
-        # Freeze panes below header row
-        ws.freeze_panes = "A3"  # row1 = title, row2 = header -> freeze at row3
+        # Freeze panes: after title+header (row 2)
+        ws.freeze_panes = "A3"
 
-        # Header style (blue bg, white text)
+        # Header style (blue bg, white text) on row 2
         header_row = 2
         for col_idx in range(1, ws.max_column + 1):
             cell = ws.cell(row=header_row, column=col_idx)
@@ -126,16 +119,27 @@ def build_output_workbook(df: pd.DataFrame, run_title: str) -> bytes:
             cell.font = Font(bold=True, color=WHITE)
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        # AutoFilter over the data range
+        # AutoFilter across entire used range
         ws.auto_filter.ref = ws.dimensions
 
-        # Title row
-        title_cell = ws.cell(row=1, column=1)
-        title_cell.value = run_title
+        # Place logo in A1 and title side-by-side in C1 (merge C1..last)
+        ws.row_dimensions[1].height = 60
+        try:
+            if logo_path.exists():
+                img = XLImage(str(logo_path))
+                img.anchor = "A1"
+                ws.add_image(img)
+        except Exception:
+            pass
+
+        # Title in C1 merged across to last column
+        start_col_for_title = 3  # column C
+        end_col_for_title = ws.max_column if ws.max_column >= start_col_for_title else start_col_for_title
+        ws.merge_cells(start_row=1, start_column=start_col_for_title, end_row=1, end_column=end_col_for_title)
+        title_cell = ws.cell(row=1, column=start_col_for_title)
+        title_cell.value = title_text
         title_cell.font = Font(bold=True, size=14)
         title_cell.alignment = Alignment(horizontal="left", vertical="center")
-        # Merge title across all columns
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ws.max_column)
 
         # Outline box around title + data block
         max_row, max_col = ws.max_row, ws.max_column
@@ -152,7 +156,7 @@ def build_output_workbook(df: pd.DataFrame, run_title: str) -> bytes:
         # Style Authorization Date column: green font for dates, red X if blank
         if "Authorization Date" in df.columns:
             date_col_idx = list(df.columns).index("Authorization Date") + 1
-            for r in range(3, ws.max_row + 1):  # start after title+header
+            for r in range(3, ws.max_row + 1):  # data starts at row 3
                 cell = ws.cell(row=r, column=date_col_idx)
                 val = (cell.value or "").strip() if isinstance(cell.value, str) else cell.value
                 if val in (None, ""):
@@ -166,49 +170,45 @@ def build_output_workbook(df: pd.DataFrame, run_title: str) -> bytes:
 
     return output.getvalue()
 
-# ----------------------------
-# Main logic
-# ----------------------------
-if qf_file:
-    # Read raw with no header to allow header detection
-    raw = pd.read_excel(qf_file, header=None)
-    hdr_row = _detect_header_row(raw)
-    df = pd.read_excel(qf_file, header=hdr_row)
 
-    # Drop rows that are completely empty (below the data)
+# ----------------------------
+# Main
+# ----------------------------
+if up:
+    # Validate file name contains 10432
+    safe_name = getattr(up, "name", "") or ""
+    if "10432" not in safe_name:
+        st.error("Please upload the correct file: the filename must include **10432**.")
+        st.stop()
+
+    # Read raw with no header to detect header row, then re-read with header
+    raw = pd.read_excel(up, header=None)
+    hdr_row = _detect_header_row(raw)
+    df = pd.read_excel(up, header=hdr_row)
+
+    # Drop completely empty rows
     df = df.dropna(how="all")
 
-    # Rename columns to clean names
+    # Rename columns
     df.columns = _rename_columns(df.columns)
 
-    # Keep the expected columns if they exist (ordered)
-    desired_cols = [
-        "PID",
-        "First Name",
-        "Last Name",
-        "Center",
-        "Class",
-        "Authorization Date",
-    ]
+    # Keep only expected columns (in order, if present)
+    desired_cols = ["PID", "First Name", "Last Name", "Center", "Class", "Authorization Date"]
     existing_cols = [c for c in desired_cols if c in df.columns]
     df = df[existing_cols]
 
-    # Build title with current timestamp
-    now_str = datetime.now().strftime("%m/%d/%Y %I:%M %p")
-    run_title = f"GEHS Quick Report — Exported {now_str}"
+    # Fixed title (per request)
+    fixed_title = "25-26 Authorizations"
 
-    # Show preview in UI
-    st.subheader("Preview")
-    st.dataframe(df.head(50), use_container_width=True)
+    # Build styled workbook (NO preview in UI)
+    xlsx_bytes = build_output_workbook(df, fixed_title)
 
-    # Build styled workbook
-    xlsx_bytes = build_output_workbook(df, run_title)
-
+    st.success("File processed. Click to download your formatted workbook.")
     st.download_button(
-        label="Download Styled Quick Report (.xlsx)",
+        label="Download Disability Authorizations (.xlsx)",
         data=xlsx_bytes,
-        file_name=f"GEHS_QuickReport_Styled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        file_name=f"HCHSP_DisabilityAuthorizations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 else:
-    st.info("Upload the GEHS Quick Report export (.xlsx) to begin.")
+    st.info("Upload the **10432** Quick Report export (.xlsx) to begin.")
