@@ -82,14 +82,7 @@ def _build(df: pd.DataFrame, logo: Path|None) -> bytes:
     scell = ws.cell(row=3, column=1, value=f"Disability Authorizations — 2025–2026 as of ({now_str})")
     scell.alignment = Alignment(horizontal="center", vertical="center")
 
-    if logo and logo.exists():
-        try:
-            img = XLImage(str(logo))
-            img.anchor = "A1"
-            ws.add_image(img)
-            ws.row_dimensions[1].height = 60
-        except Exception:
-            pass
+    
 
     for j, col in enumerate(df.columns, start=1):
         c = ws.cell(row=header_row, column=j, value=col)
