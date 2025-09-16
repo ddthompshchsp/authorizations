@@ -12,7 +12,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo  # Excel Table for dynamic banding
 
 # ----------------------------
-# Page Config + UI Header (logo only in UI, not in Excel export)
+
 # ----------------------------
 st.set_page_config(page_title="HCHSP — Disability Authorizations (Services Style)", layout="wide")
 
