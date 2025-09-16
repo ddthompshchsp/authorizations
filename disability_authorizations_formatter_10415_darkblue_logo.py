@@ -9,10 +9,10 @@ import pytz
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Side, PatternFill, Font
 from openpyxl.utils import get_column_letter
-from openpyxl.drawing.image import Image as XLImage
 
 st.set_page_config(page_title="HCHSP — Disability Authorizations (Services Style)", layout="wide")
 
+# UI header (logo shown in Streamlit only; NOT embedded in Excel)
 logo_path = Path("header_logo.png")
 hdr_l, hdr_c, hdr_r = st.columns([1, 2, 1])
 with hdr_c:
@@ -31,17 +31,17 @@ st.divider()
 
 up = st.file_uploader("Upload *10415*.xlsx", type=["xlsx"], key="qf")
 
-BLUE = "1F4E78"
+BLUE  = "1F4E78"
 WHITE = "FFFFFF"
-GRID = "D9D9D9"
-RED = "C00000"
+GRID  = "D9D9D9"
+RED   = "C00000"
 GREEN = "008000"
 BLACK = "000000"
 
-THIN = Side(style="thin", color=BLACK)
+THIN = Side(style="thin",   color=BLACK)
 MED  = Side(style="medium", color=BLACK)
 
-def _autosize(ws, header_row):
+def _autosize(ws, header_row: int):
     for col in range(1, ws.max_column + 1):
         letter = get_column_letter(col)
         max_len = 0
@@ -52,12 +52,11 @@ def _autosize(ws, header_row):
             v = ws.cell(row=r, column=col).value
             if v is None:
                 continue
-            l = len(str(v))
-            if l > max_len:
-                max_len = l
+            max_len = max(max_len, len(str(v)))
         ws.column_dimensions[letter].width = min(max_len + 3, 48)
 
-def _build(df: pd.DataFrame, logo: Path|None) -> bytes:
+def _build(df: pd.DataFrame) -> bytes:
+    # Normalize dates to strings
     if "Authorization Date" in df.columns:
         dt = pd.to_datetime(df["Authorization Date"], errors="coerce")
         df["Authorization Date"] = dt.dt.strftime("%m/%d/%Y").fillna("")
@@ -67,9 +66,10 @@ def _build(df: pd.DataFrame, logo: Path|None) -> bytes:
     ws.title = "Authorizations"
 
     header_row = 4
-    data_row0 = header_row + 1
+    data_row0  = header_row + 1
     total_cols = max(1, df.shape[1])
 
+    # Title (row 2) and subtitle (row 3)
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=total_cols)
     ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=total_cols)
 
@@ -82,28 +82,21 @@ def _build(df: pd.DataFrame, logo: Path|None) -> bytes:
     scell = ws.cell(row=3, column=1, value=f"Disability Authorizations — 2025–2026 as of ({now_str})")
     scell.alignment = Alignment(horizontal="center", vertical="center")
 
-    if logo and logo.exists():
-        try:
-            img = XLImage(str(logo))
-            img.anchor = "A1"
-            ws.add_image(img)
-            ws.row_dimensions[1].height = 60
-        except Exception:
-            pass
-
+    # Header row (row 4)
     for j, col in enumerate(df.columns, start=1):
         c = ws.cell(row=header_row, column=j, value=col)
         c.fill = PatternFill("solid", fgColor=BLUE)
         c.font = Font(bold=True, color=WHITE)
         c.alignment = Alignment(horizontal="center", vertical="center")
 
+    # Data rows (start row 5) with banding and date styling
     for i, row in enumerate(df.itertuples(index=False), start=data_row0):
         is_band = (i - data_row0) % 2 == 1
         for j, val in enumerate(row, start=1):
             c = ws.cell(row=i, column=j, value=val)
             if is_band:
                 c.fill = PatternFill("solid", fgColor=GRID)
-            if df.columns[j-1] == "Authorization Date":
+            if df.columns[j - 1] == "Authorization Date":
                 if (val is None) or (str(val).strip() == ""):
                     c.value = "✗"
                     c.font = Font(bold=True, color=RED)
@@ -113,6 +106,8 @@ def _build(df: pd.DataFrame, logo: Path|None) -> bytes:
 
     max_row = ws.max_row
     max_col = ws.max_column
+
+    # Thin grid
     for r in range(header_row, max_row + 1):
         for c in range(1, max_col + 1):
             cell = ws.cell(row=r, column=c)
@@ -133,11 +128,12 @@ def _build(df: pd.DataFrame, logo: Path|None) -> bytes:
             bottom=MED,
         )
     for r in range(header_row, max_row + 1):
-        ws.cell(row=r, column=1).border = Border(left=MED, right=THIN, top=THIN, bottom=THIN)
+        ws.cell(row=r, column=1).border       = Border(left=MED, right=THIN, top=THIN, bottom=THIN)
         ws.cell(row=r, column=max_col).border = Border(left=THIN, right=MED, top=THIN, bottom=THIN)
 
+    # Freeze below header and put filter EXACTLY on the header row → sorting works
     ws.freeze_panes = f"A{data_row0}"
-    ws.auto_filter.ref = ws.dimensions
+    ws.auto_filter.ref = f"A{header_row}:{get_column_letter(max_col)}{max_row}"
 
     _autosize(ws, header_row)
 
@@ -195,6 +191,9 @@ def _split_child_name(df: pd.DataFrame) -> pd.DataFrame:
                 df[col] = name_split[col]
     return df
 
+# ----------------------------
+# Main
+# ----------------------------
 if up:
     safe_name = getattr(up, "name", "") or ""
     if "10415" not in safe_name:
@@ -208,11 +207,12 @@ if up:
     df.columns = _rename_columns(df.columns)
     df = _split_child_name(df)
 
-    preferred = ["PID","First Name","Last Name","Center","Class","Authorization Date","Disability Identified","Primary Disability"]
+    preferred = ["PID", "First Name", "Last Name", "Center", "Class",
+                 "Authorization Date", "Disability Identified", "Primary Disability"]
     existing = [c for c in preferred if c in df.columns]
     df = df[existing]
 
-    xlsx = _build(df, logo_path if logo_path.exists() else None)
+    xlsx = _build(df)
 
     st.success("File processed successfully. Click below to download.")
     st.download_button(
@@ -223,5 +223,3 @@ if up:
     )
 else:
     st.info("Upload the **10415** export (.xlsx) to begin.")
-
-
