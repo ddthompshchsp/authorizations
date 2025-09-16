@@ -161,8 +161,8 @@ def build_output_workbook(df: pd.DataFrame, title_text: str) -> bytes:
 # ----------------------------
 if up:
     safe_name = getattr(up, "name", "") or ""
-    if "10432" not in safe_name:
-        st.error("Please upload the correct file: filename must include **10432**.")
+    if "10415" not in safe_name:
+        st.error("Please upload the correct file: filename must include **10415**.")
         st.stop()
 
     raw = pd.read_excel(up, header=None)
