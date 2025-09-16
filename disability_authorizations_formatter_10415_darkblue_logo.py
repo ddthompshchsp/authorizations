@@ -9,6 +9,7 @@ import pytz
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Side, PatternFill, Font
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo  # <-- Excel Table
 
 st.set_page_config(page_title="HCHSP — Disability Authorizations (Services Style)", layout="wide")
 
@@ -31,9 +32,9 @@ st.divider()
 
 up = st.file_uploader("Upload *10415*.xlsx", type=["xlsx"], key="qf")
 
+# Colors (header blue kept for title, but table styling controls data/header rows)
 BLUE  = "1F4E78"
 WHITE = "FFFFFF"
-GRID  = "D9D9D9"
 RED   = "C00000"
 GREEN = "008000"
 BLACK = "000000"
@@ -41,21 +42,7 @@ BLACK = "000000"
 THIN = Side(style="thin",   color=BLACK)
 MED  = Side(style="medium", color=BLACK)
 
-def _autosize(ws, header_row: int):
-    for col in range(1, ws.max_column + 1):
-        letter = get_column_letter(col)
-        max_len = 0
-        hv = ws.cell(row=header_row, column=col).value
-        if hv is not None:
-            max_len = len(str(hv))
-        for r in range(header_row + 1, ws.max_row + 1):
-            v = ws.cell(row=r, column=col).value
-            if v is None:
-                continue
-            max_len = max(max_len, len(str(v)))
-        ws.column_dimensions[letter].width = min(max_len + 3, 48)
-
-def _build(df: pd.DataFrame) -> bytes:
+def _build_with_table(df: pd.DataFrame) -> bytes:
     # Normalize dates to strings
     if "Authorization Date" in df.columns:
         dt = pd.to_datetime(df["Authorization Date"], errors="coerce")
@@ -82,20 +69,16 @@ def _build(df: pd.DataFrame) -> bytes:
     scell = ws.cell(row=3, column=1, value=f"Disability Authorizations — 2025–2026 as of ({now_str})")
     scell.alignment = Alignment(horizontal="center", vertical="center")
 
-    # Header row (row 4)
+    # Write header row (row 4)
     for j, col in enumerate(df.columns, start=1):
         c = ws.cell(row=header_row, column=j, value=col)
-        c.fill = PatternFill("solid", fgColor=BLUE)
-        c.font = Font(bold=True, color=WHITE)
+        # The table style will take over the header look; keep it centered
         c.alignment = Alignment(horizontal="center", vertical="center")
 
-    # Data rows (start row 5) with banding and date styling
+    # Write data (row 5+), add red ✗ / green for Authorization Date
     for i, row in enumerate(df.itertuples(index=False), start=data_row0):
-        is_band = (i - data_row0) % 2 == 1
         for j, val in enumerate(row, start=1):
             c = ws.cell(row=i, column=j, value=val)
-            if is_band:
-                c.fill = PatternFill("solid", fgColor=GRID)
             if df.columns[j - 1] == "Authorization Date":
                 if (val is None) or (str(val).strip() == ""):
                     c.value = "✗"
@@ -107,13 +90,30 @@ def _build(df: pd.DataFrame) -> bytes:
     max_row = ws.max_row
     max_col = ws.max_column
 
-    # Thin grid
+    # Create an Excel Table over the header + data range.
+    # This gives you dynamic banding and header filters that stay correct after sorting/filtering.
+    table_ref = f"A{header_row}:{get_column_letter(max_col)}{max_row}"
+    table = Table(displayName="AuthorizationsTable", ref=table_ref)
+    style = TableStyleInfo(
+        name="TableStyleMedium9",   # medium blue banded table (adjust if you prefer a different look)
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    table.tableStyleInfo = style
+    ws.add_table(table)
+
+    # Freeze below the header row so headers stay visible when scrolling
+    ws.freeze_panes = f"A{data_row0}"
+
+    # Optional: add an outside medium border around the whole table region
     for r in range(header_row, max_row + 1):
         for c in range(1, max_col + 1):
             cell = ws.cell(row=r, column=c)
+            # thin grid; outline thickened below
             cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
-    # Medium outline
     for c in range(1, max_col + 1):
         ws.cell(row=header_row, column=c).border = Border(
             left=MED if c == 1 else THIN,
@@ -131,11 +131,19 @@ def _build(df: pd.DataFrame) -> bytes:
         ws.cell(row=r, column=1).border       = Border(left=MED, right=THIN, top=THIN, bottom=THIN)
         ws.cell(row=r, column=max_col).border = Border(left=THIN, right=MED, top=THIN, bottom=THIN)
 
-    # Freeze below header and put filter EXACTLY on the header row → sorting works
-    ws.freeze_panes = f"A{data_row0}"
-    ws.auto_filter.ref = f"A{header_row}:{get_column_letter(max_col)}{max_row}"
-
-    _autosize(ws, header_row)
+    # Autosize columns (skip merged title rows)
+    for col in range(1, ws.max_column + 1):
+        letter = get_column_letter(col)
+        max_len = 0
+        hv = ws.cell(row=header_row, column=col).value
+        if hv is not None:
+            max_len = len(str(hv))
+        for r in range(header_row + 1, ws.max_row + 1):
+            v = ws.cell(row=r, column=col).value
+            if v is None:
+                continue
+            max_len = max(max_len, len(str(v)))
+        ws.column_dimensions[letter].width = min(max_len + 3, 48)
 
     bio = io.BytesIO()
     wb.save(bio)
@@ -147,7 +155,7 @@ def _detect_header_row(raw_df: pd.DataFrame) -> int:
     if first_col.str.contains(r"authorization:\s*regarding my child", na=False).any():
         return first_col.str.contains(r"authorization:\s*regarding my child", na=False).idxmax()
     if first_col.str.contains("participant pid", na=False).any():
-        return first_col.str.contains("participant pid", na=False).idxmax()
+        return first_col.str_contains("participant pid", na=False).idxmax()  # <-- if needed, change to .str.contains
     return raw_df.notna().sum(axis=1).idxmax()
 
 def _rename_columns(cols):
@@ -207,12 +215,13 @@ if up:
     df.columns = _rename_columns(df.columns)
     df = _split_child_name(df)
 
+    # Column order
     preferred = ["PID", "First Name", "Last Name", "Center", "Class",
                  "Authorization Date", "Disability Identified", "Primary Disability"]
     existing = [c for c in preferred if c in df.columns]
     df = df[existing]
 
-    xlsx = _build(df)
+    xlsx = _build_with_table(df)
 
     st.success("File processed successfully. Click below to download.")
     st.download_button(
@@ -223,3 +232,4 @@ if up:
     )
 else:
     st.info("Upload the **10415** export (.xlsx) to begin.")
+
