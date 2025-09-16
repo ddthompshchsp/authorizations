@@ -11,14 +11,8 @@ from openpyxl.styles import Alignment, Border, Side, PatternFill, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.drawing.image import Image as XLImage
 
-# ----------------------------
-# Page Config
-# ----------------------------
-st.set_page_config(page_title="HCHSP — Disability Authorizations Formatter", layout="wide")
+st.set_page_config(page_title="HCHSP — Disability Authorizations (Services Style)", layout="wide")
 
-# ----------------------------
-# Header (UI ONLY)
-# ----------------------------
 logo_path = Path("header_logo.png")
 hdr_l, hdr_c, hdr_r = st.columns([1, 2, 1])
 with hdr_c:
@@ -33,28 +27,134 @@ with hdr_c:
         """,
         unsafe_allow_html=True,
     )
-
 st.divider()
 
-# ----------------------------
-# File Upload
-# ----------------------------
 up = st.file_uploader("Upload *10415*.xlsx", type=["xlsx"], key="qf")
 
-# ----------------------------
-# Styles & Constants
-# ----------------------------
-BLUE = "1F4E78"   # darker header blue
+BLUE = "1F4E78"
 WHITE = "FFFFFF"
-GREEN = "008000"  # valid dates font (green)
-RED = "C00000"    # missing dates X (red)
+GRID = "D9D9D9"
+RED = "C00000"
+GREEN = "008000"
+BLACK = "000000"
 
-THIN = Side(style="thin", color="000000")
-MED  = Side(style="medium", color="000000")
+THIN = Side(style="thin", color=BLACK)
+MED  = Side(style="medium", color=BLACK)
 
+def _autosize(ws, header_row):
+    for col in range(1, ws.max_column + 1):
+        letter = get_column_letter(col)
+        max_len = 0
+        hv = ws.cell(row=header_row, column=col).value
+        if hv is not None:
+            max_len = len(str(hv))
+        for r in range(header_row + 1, ws.max_row + 1):
+            v = ws.cell(row=r, column=col).value
+            if v is None:
+                continue
+            l = len(str(v))
+            if l > max_len:
+                max_len = l
+        ws.column_dimensions[letter].width = min(max_len + 3, 48)
+
+def _build(df: pd.DataFrame, logo: Path|None) -> bytes:
+    if "Authorization Date" in df.columns:
+        dt = pd.to_datetime(df["Authorization Date"], errors="coerce")
+        df["Authorization Date"] = dt.dt.strftime("%m/%d/%Y").fillna("")
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Authorizations"
+
+    header_row = 4
+    data_row0 = header_row + 1
+    total_cols = max(1, df.shape[1])
+
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=total_cols)
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=total_cols)
+
+    tcell = ws.cell(row=2, column=1, value="Hidalgo County Head Start Program")
+    tcell.font = Font(bold=True, size=14)
+    tcell.alignment = Alignment(horizontal="center", vertical="center")
+
+    tz = pytz.timezone("America/Chicago")
+    now_str = datetime.now(tz).strftime("%m/%d/%y %I:%M %p CT")
+    scell = ws.cell(row=3, column=1, value=f"Disability Authorizations — 2025–2026 as of ({now_str})")
+    scell.alignment = Alignment(horizontal="center", vertical="center")
+
+    if logo and logo.exists():
+        try:
+            img = XLImage(str(logo))
+            img.anchor = "A1"
+            ws.add_image(img)
+            ws.row_dimensions[1].height = 60
+        except Exception:
+            pass
+
+    for j, col in enumerate(df.columns, start=1):
+        c = ws.cell(row=header_row, column=j, value=col)
+        c.fill = PatternFill("solid", fgColor=BLUE)
+        c.font = Font(bold=True, color=WHITE)
+        c.alignment = Alignment(horizontal="center", vertical="center")
+
+    for i, row in enumerate(df.itertuples(index=False), start=data_row0):
+        is_band = (i - data_row0) % 2 == 1
+        for j, val in enumerate(row, start=1):
+            c = ws.cell(row=i, column=j, value=val)
+            if is_band:
+                c.fill = PatternFill("solid", fgColor=GRID)
+            if df.columns[j-1] == "Authorization Date":
+                if (val is None) or (str(val).strip() == ""):
+                    c.value = "✗"
+                    c.font = Font(bold=True, color=RED)
+                    c.alignment = Alignment(horizontal="center", vertical="center")
+                else:
+                    c.font = Font(color=GREEN)
+
+    max_row = ws.max_row
+    max_col = ws.max_column
+    for r in range(header_row, max_row + 1):
+        for c in range(1, max_col + 1):
+            cell = ws.cell(row=r, column=c)
+            cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+
+    # Medium outline
+    for c in range(1, max_col + 1):
+        ws.cell(row=header_row, column=c).border = Border(
+            left=MED if c == 1 else THIN,
+            right=MED if c == max_col else THIN,
+            top=MED,
+            bottom=THIN,
+        )
+        ws.cell(row=max_row, column=c).border = Border(
+            left=MED if c == 1 else THIN,
+            right=MED if c == max_col else THIN,
+            top=THIN,
+            bottom=MED,
+        )
+    for r in range(header_row, max_row + 1):
+        ws.cell(row=r, column=1).border = Border(left=MED, right=THIN, top=THIN, bottom=THIN)
+        ws.cell(row=r, column=max_col).border = Border(left=THIN, right=MED, top=THIN, bottom=THIN)
+
+    ws.freeze_panes = f"A{data_row0}"
+    ws.auto_filter.ref = ws.dimensions
+
+    _autosize(ws, header_row)
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return bio.getvalue()
+
+def _detect_header_row(raw_df: pd.DataFrame) -> int:
+    first_col = raw_df.iloc[:, 0].astype(str).str.strip().str.lower()
+    if first_col.str.contains(r"authorization:\s*regarding my child", na=False).any():
+        return first_col.str.contains(r"authorization:\s*regarding my child", na=False).idxmax()
+    if first_col.str.contains("participant pid", na=False).any():
+        return first_col.str.contains("participant pid", na=False).idxmax()
+    return raw_df.notna().sum(axis=1).idxmax()
 
 def _rename_columns(cols):
-    """Standardize column names for 10415 variants."""
     mapping = {}
     for c in cols:
         s = str(c).strip()
@@ -80,9 +180,7 @@ def _rename_columns(cols):
             mapping[c] = s
     return [mapping[c] for c in cols]
 
-
 def _split_child_name(df: pd.DataFrame) -> pd.DataFrame:
-    """If only 'Child Name' exists, split into First/Last."""
     if "Child Name" in df.columns:
         def split_name(full):
             if pd.isna(full):
@@ -97,111 +195,6 @@ def _split_child_name(df: pd.DataFrame) -> pd.DataFrame:
                 df[col] = name_split[col]
     return df
 
-
-def _autosize_columns(ws, header_row=3):
-    """Autosize columns using header + data length (avoid merged cells)."""
-    for col_idx in range(1, ws.max_column + 1):
-        letter = get_column_letter(col_idx)
-        max_len = 0
-        hdr_val = ws.cell(row=header_row, column=col_idx).value
-        max_len = len(str(hdr_val)) if hdr_val is not None else 0
-        for r in range(header_row + 1, ws.max_row + 1):
-            val = ws.cell(row=r, column=col_idx).value
-            if val is None:
-                continue
-            max_len = max(max_len, len(str(val)))
-        ws.column_dimensions[letter].width = min(max_len + 2, 45)
-
-
-def _build_workbook(df: pd.DataFrame, title_text: str, logo: Path | None) -> bytes:
-    """Return formatted workbook bytes (dark blue header, centered title, logo in A1)."""
-    # Normalize date column to MM/DD/YYYY strings
-    if "Authorization Date" in df.columns:
-        dt = pd.to_datetime(df["Authorization Date"], errors="coerce")
-        df["Authorization Date"] = dt.dt.strftime("%m/%d/%Y").fillna("")
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Authorizations"
-
-    # Write header row at row 3
-    for j, col in enumerate(df.columns, start=1):
-        c = ws.cell(row=3, column=j, value=col)
-        c.font = Font(bold=True, color=WHITE)
-        c.fill = PatternFill("solid", fgColor=BLUE)
-        c.alignment = Alignment(horizontal="center", vertical="center")
-
-    # Write data starting row 4
-    for i, row in enumerate(df.itertuples(index=False), start=4):
-        for j, val in enumerate(row, start=1):
-            ws.cell(row=i, column=j, value=val)
-
-    # Title row (row 2)
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=df.shape[1])
-    tcell = ws.cell(row=2, column=1, value=title_text)
-    tcell.font = Font(bold=True, size=14)
-    tcell.alignment = Alignment(horizontal="center", vertical="center")
-
-    # Logo (row 1, col A)
-    if logo and logo.exists():
-        try:
-            img = XLImage(str(logo))
-            img.anchor = "A1"
-            ws.add_image(img)
-            ws.row_dimensions[1].height = 60
-        except Exception:
-            pass  # if Pillow or image fails, still deliver workbook
-
-    # Borders (grid)
-    max_row, max_col = ws.max_row, ws.max_column
-    for r in range(2, max_row + 1):
-        for c in range(1, max_col + 1):
-            cell = ws.cell(row=r, column=c)
-            left   = MED if c == 1 else THIN
-            right  = MED if c == max_col else THIN
-            top    = MED if r == 2 else THIN
-            bottom = MED if r == max_row else THIN
-            cell.border = Border(left=left, right=right, top=top, bottom=bottom)
-
-    # Freeze below header & add filter
-    ws.freeze_panes = "A4"
-    ws.auto_filter.ref = ws.dimensions
-
-    # Authorization Date styling: red ✗ if blank, green if present
-    if "Authorization Date" in df.columns:
-        date_idx = list(df.columns).index("Authorization Date") + 1
-        for r in range(4, ws.max_row + 1):
-            cell = ws.cell(row=r, column=date_idx)
-            val = cell.value
-            if val in (None, ""):
-                cell.value = "✗"
-                cell.font = Font(bold=True, color=RED)
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-            else:
-                cell.font = Font(color=GREEN)
-
-    _autosize_columns(ws, header_row=3)
-
-    bio = io.BytesIO()
-    wb.save(bio)
-    bio.seek(0)
-    return bio.getvalue()
-
-
-def _detect_header_row(raw_df: pd.DataFrame) -> int:
-    """Detect header row by content in first column."""
-    first_col = raw_df.iloc[:, 0].astype(str).str.strip().str.lower()
-    if first_col.str.contains(r"authorization:\s*regarding my child", na=False).any():
-        return first_col.str.contains(r"authorization:\s*regarding my child", na=False).idxmax()
-    if first_col.str.contains("participant pid", na=False).any():
-        return first_col.str.contains("participant pid", na=False).idxmax()
-    # fallback: densest row
-    return raw_df.notna().sum(axis=1).idxmax()
-
-
-# ----------------------------
-# Main
-# ----------------------------
 if up:
     safe_name = getattr(up, "name", "") or ""
     if "10415" not in safe_name:
@@ -215,23 +208,17 @@ if up:
     df.columns = _rename_columns(df.columns)
     df = _split_child_name(df)
 
-    # Column order: Center immediately after Last Name
-    preferred = ["PID", "First Name", "Last Name", "Center", "Class",
-                 "Authorization Date", "Disability Identified", "Primary Disability"]
+    preferred = ["PID","First Name","Last Name","Center","Class","Authorization Date","Disability Identified","Primary Disability"]
     existing = [c for c in preferred if c in df.columns]
     df = df[existing]
 
-    tz = pytz.timezone("America/Chicago")
-    now_str = datetime.now(tz).strftime("%m/%d/%Y %I:%M %p")
-    fixed_title = f"25-26 Disability Authorizations — Exported {now_str}"
-
-    xlsx = _build_workbook(df, fixed_title, logo_path if logo_path.exists() else None)
+    xlsx = _build(df, logo_path if logo_path.exists() else None)
 
     st.success("File processed successfully. Click below to download.")
     st.download_button(
         "⬇️ Download Disability Authorizations (.xlsx)",
         data=xlsx,
-        file_name=f"HCHSP_DisabilityAuthorizations_{datetime.now(tz).strftime('%Y%m%d_%H%M%S')}.xlsx",
+        file_name=f"HCHSP_DisabilityAuthorizations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 else:
