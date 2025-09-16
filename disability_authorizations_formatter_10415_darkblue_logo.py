@@ -19,7 +19,6 @@ count_before, count_after, str(code_path)
 Result
 (0, 0, '/mnt/data/disability_authorizations_formatter_10415_darkblue_logo.py')
 
-Thought for 8s
 
 Analysis paused
 python
