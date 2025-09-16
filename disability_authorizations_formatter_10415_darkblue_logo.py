@@ -1,3 +1,7 @@
+from pathlib import Path
+
+# Recreate the two files since previous session expired
+app_code = '''\
 import io
 import re
 from datetime import datetime
@@ -9,7 +13,6 @@ import pytz
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Side, PatternFill, Font
 from openpyxl.utils import get_column_letter
-from openpyxl.drawing.image import Image as XLImage
 
 st.set_page_config(page_title="HCHSP — Disability Authorizations (Services Style)", layout="wide")
 
@@ -57,7 +60,7 @@ def _autosize(ws, header_row):
                 max_len = l
         ws.column_dimensions[letter].width = min(max_len + 3, 48)
 
-def _build(df: pd.DataFrame, logo: Path|None) -> bytes:
+def _build(df: pd.DataFrame) -> bytes:
     if "Authorization Date" in df.columns:
         dt = pd.to_datetime(df["Authorization Date"], errors="coerce")
         df["Authorization Date"] = dt.dt.strftime("%m/%d/%Y").fillna("")
@@ -81,8 +84,6 @@ def _build(df: pd.DataFrame, logo: Path|None) -> bytes:
     now_str = datetime.now(tz).strftime("%m/%d/%y %I:%M %p CT")
     scell = ws.cell(row=3, column=1, value=f"Disability Authorizations — 2025–2026 as of ({now_str})")
     scell.alignment = Alignment(horizontal="center", vertical="center")
-
-    
 
     for j, col in enumerate(df.columns, start=1):
         c = ws.cell(row=header_row, column=j, value=col)
@@ -111,7 +112,6 @@ def _build(df: pd.DataFrame, logo: Path|None) -> bytes:
             cell = ws.cell(row=r, column=c)
             cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
-    # Medium outline
     for c in range(1, max_col + 1):
         ws.cell(row=header_row, column=c).border = Border(
             left=MED if c == 1 else THIN,
@@ -130,7 +130,8 @@ def _build(df: pd.DataFrame, logo: Path|None) -> bytes:
         ws.cell(row=r, column=max_col).border = Border(left=THIN, right=MED, top=THIN, bottom=THIN)
 
     ws.freeze_panes = f"A{data_row0}"
-    ws.auto_filter.ref = ws.dimensions
+    # FIX: apply filter exactly on header row through max row
+    ws.auto_filter.ref = f"A{header_row}:{get_column_letter(max_col)}{max_row}"
 
     _autosize(ws, header_row)
 
@@ -141,33 +142,33 @@ def _build(df: pd.DataFrame, logo: Path|None) -> bytes:
 
 def _detect_header_row(raw_df: pd.DataFrame) -> int:
     first_col = raw_df.iloc[:, 0].astype(str).str.strip().str.lower()
-    if first_col.str.contains(r"authorization:\s*regarding my child", na=False).any():
-        return first_col.str.contains(r"authorization:\s*regarding my child", na=False).idxmax()
+    if first_col.str.contains(r"authorization:\\s*regarding my child", na=False).any():
+        return first_col.str.contains(r"authorization:\\s*regarding my child", na=False).idxmax()
     if first_col.str.contains("participant pid", na=False).any():
-        return first_col.str.contains("participant pid", na=False).idxmax()
+        return first_col.str_contains("participant pid", na=False).idxmax()
     return raw_df.notna().sum(axis=1).idxmax()
 
 def _rename_columns(cols):
     mapping = {}
     for c in cols:
         s = str(c).strip()
-        if re.search(r"authorization:\s*regarding my child", s, re.I):
+        if re.search(r"authorization:\\s*regarding my child", s, re.I):
             mapping[c] = "Child Name"
-        elif re.search(r"authorization:\s*date", s, re.I):
+        elif re.search(r"authorization:\\s*date", s, re.I):
             mapping[c] = "Authorization Date"
-        elif re.search(r"IEP/IFSP\s*Dis:Identified", s, re.I):
+        elif re.search(r"IEP/IFSP\\s*Dis:Identified", s, re.I):
             mapping[c] = "Disability Identified"
-        elif re.search(r"primary\s*disability", s, re.I):
+        elif re.search(r"primary\\s*disability", s, re.I):
             mapping[c] = "Primary Disability"
-        elif re.search(r"\bcenter name\b|\bcenter\b", s, re.I):
+        elif re.search(r"\\bcenter name\\b|\\bcenter\\b", s, re.I):
             mapping[c] = "Center"
-        elif re.search(r"\bclass name\b|\bclass\b", s, re.I):
+        elif re.search(r"\\bclass name\\b|\\bclass\\b", s, re.I):
             mapping[c] = "Class"
-        elif re.search(r"\bparticipant pid\b|\bpid\b", s, re.I):
+        elif re.search(r"\\bparticipant pid\\b|\\bpid\\b", s, re.I):
             mapping[c] = "PID"
-        elif re.search(r"\bfirst name\b", s, re.I):
+        elif re.search(r"\\bfirst name\\b", s, re.I):
             mapping[c] = "First Name"
-        elif re.search(r"\blast name\b", s, re.I):
+        elif re.search(r"\\blast name\\b", s, re.I):
             mapping[c] = "Last Name"
         else:
             mapping[c] = s
@@ -205,7 +206,7 @@ if up:
     existing = [c for c in preferred if c in df.columns]
     df = df[existing]
 
-    xlsx = _build(df, logo_path if logo_path.exists() else None)
+    xlsx = _build(df)
 
     st.success("File processed successfully. Click below to download.")
     st.download_button(
@@ -216,3 +217,10 @@ if up:
     )
 else:
     st.info("Upload the **10415** export (.xlsx) to begin.")
+'''
+
+app_file = Path("/mnt/data/disability_authorizations_formatter_10415_services_style_nologo_filtersfixed.py")
+app_file.write_text(app_code, encoding="utf-8")
+
+str(app_file)
+
