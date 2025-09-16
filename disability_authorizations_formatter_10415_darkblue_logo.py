@@ -1,7 +1,6 @@
 from pathlib import Path
 
-# Recreate the two files since previous session expired
-app_code = '''\
+
 import io
 import re
 from datetime import datetime
