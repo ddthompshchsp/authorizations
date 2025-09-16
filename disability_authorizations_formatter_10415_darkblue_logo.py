@@ -12,11 +12,10 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo  # Excel Table for dynamic banding
 
 # ----------------------------
-# Page Config + UI Header
+# Page Config + UI Header (logo only in UI, not in Excel export)
 # ----------------------------
 st.set_page_config(page_title="HCHSP — Disability Authorizations (Services Style)", layout="wide")
 
-# Show logo only in the Streamlit UI (not embedded in Excel export)
 logo_path = Path("header_logo.png")
 hdr_l, hdr_c, hdr_r = st.columns([1, 2, 1])
 with hdr_c:
@@ -41,8 +40,6 @@ up = st.file_uploader("Upload *10415*.xlsx", type=["xlsx"], key="qf")
 # ----------------------------
 # Colors & Styles
 # ----------------------------
-BLUE  = "1F4E78"   # kept for titles if needed
-WHITE = "FFFFFF"
 RED   = "C00000"
 GREEN = "008000"
 BLACK = "000000"
@@ -122,7 +119,7 @@ def _autosize(ws, header_row: int):
         ws.column_dimensions[letter].width = min(max_len + 3, 48)
 
 def _build_with_table(df: pd.DataFrame) -> bytes:
-    """Build workbook with an Excel Table (dynamic banding + filters on header)."""
+    """Build workbook with an Excel Table (gray/white dynamic banding + filters on header)."""
     # Normalize dates to strings
     if "Authorization Date" in df.columns:
         dt = pd.to_datetime(df["Authorization Date"], errors="coerce")
@@ -170,11 +167,11 @@ def _build_with_table(df: pd.DataFrame) -> bytes:
     max_row = ws.max_row
     max_col = ws.max_column
 
-    # Excel Table: dynamic banding + header filters that stay correct after sort/filter
+    # Excel Table: gray/white banding + header filters
     table_ref = f"A{header_row}:{get_column_letter(max_col)}{max_row}"
     table = Table(displayName="AuthorizationsTable", ref=table_ref)
     table.tableStyleInfo = TableStyleInfo(
-        name="TableStyleMedium9",  # change style name if you prefer a different look
+        name="TableStyleMedium2",     # <-- gray + white banding
         showFirstColumn=False,
         showLastColumn=False,
         showRowStripes=True,
@@ -185,7 +182,7 @@ def _build_with_table(df: pd.DataFrame) -> bytes:
     # Freeze below the header so headers stay visible
     ws.freeze_panes = f"A{data_row0}"
 
-    # Optional: outline around the whole table region
+    # Optional: outside outline around the table
     for r in range(header_row, max_row + 1):
         for c in range(1, max_col + 1):
             cell = ws.cell(row=r, column=c)
@@ -245,4 +242,5 @@ if up:
     )
 else:
     st.info("Upload the **10415** export (.xlsx) to begin.")
+
 
